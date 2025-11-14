@@ -1,0 +1,116 @@
+Decision Tree
+
+
+#DECISION TREE CLASSIFIER
+import os
+import pandas as pd
+import numpy as np
+
+from sklearn.model_selection import train_test_split, StratifiedKFold, GridSearchCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score,
+    roc_auc_score, confusion_matrix, classification_report
+)
+import joblib
+
+# =====================
+# 1. 读取数据
+# =====================
+df = pd.read_csv("data/ExtractedC.csv", sep=";")
+df.columns = df.columns.str.strip()   # 去掉多余空格/tab
+
+assert "Target" in df.columns, "⚠ 没有找到 'Target' 列，请检查 CSV 文件"
+
+X = df.drop("Target", axis=1)
+y = df["Target"]
+
+# One-hot 编码 (适合分类变量)
+X = pd.get_dummies(X, drop_first=True)
+
+# 数据集划分
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=42
+)
+
+# =====================
+# 2. Pipeline + GridSearchCV
+# =====================
+pipe = Pipeline([
+    ("scaler", StandardScaler()),  # 虽然决策树不一定需要标准化，但加上没坏处
+    ("clf", DecisionTreeClassifier(random_state=42))
+])
+
+param_grid = {
+    "clf__criterion": ["gini", "entropy"],
+    "clf__max_depth": [None, 5, 10, 20, 30],
+    "clf__min_samples_split": [2, 5, 10],
+    "clf__min_samples_leaf": [1, 2, 4],
+    "clf__class_weight": [None, "balanced"]
+}
+
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+grid = GridSearchCV(
+    pipe,
+    param_grid,
+    scoring="f1_weighted",
+    cv=cv,
+    n_jobs=-1,
+    verbose=1
+)
+
+# 训练 + 调参
+grid.fit(X_train, y_train)
+
+print("✅ Best Params:", grid.best_params_)
+best_model = grid.best_estimator_
+
+# =====================
+# 3. 模型评估
+# =====================
+y_pred = best_model.predict(X_test)
+
+# 部分类别的情况需要 try-except 包裹 AUC
+try:
+    y_prob = best_model.predict_proba(X_test)[:, 1]
+    auc = roc_auc_score(y_test, y_prob)
+except Exception:
+    auc = None
+
+print("\n📊 模型评估结果")
+print("Accuracy :", accuracy_score(y_test, y_pred))
+print("Precision:", precision_score(y_test, y_pred, average="weighted"))
+print("Recall   :", recall_score(y_test, y_pred, average="weighted"))
+print("F1 Score :", f1_score(y_test, y_pred, average="weighted"))
+if auc:
+    print("AUC      :", auc)
+
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred))
+
+print("\nConfusion Matrix:")
+print(confusion_matrix(y_test, y_pred))
+
+# =====================
+# 4. 保存最佳模型
+# =====================
+os.makedirs("models", exist_ok=True)
+joblib.dump(best_model, "models/best_decisiontree.pkl")
+print("\n💾 最佳模型已保存到 models/best_decisiontree.pkl")
+
+# =====================
+# 5. 保存评估结果
+# =====================
+results = {
+    "accuracy": accuracy_score(y_test, y_pred),
+    "precision": precision_score(y_test, y_pred, average="weighted"),
+    "recall": recall_score(y_test, y_pred, average="weighted"),
+    "f1": f1_score(y_test, y_pred, average="weighted"),
+    "auc": auc
+}
+results_df = pd.DataFrame([results])
+results_df.to_csv("data/DecisionTreeResults.csv", sep=";", index=False)
+print("📄 评估结果已保存到 data/DecisionTreeResults.csv")
